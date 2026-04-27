@@ -66,44 +66,6 @@ model_selection$model <- as.factor(model_selection$model)
 
 n_features <- 47
 
-Tree_Results_imp <- ranger(model ~., data = model_selection, write.forest = T, 
-                       num.threads = 16, oob.error = T, keep.inbag = T, importance = "impurity")
-default_rmse_imp <- sqrt(Tree_Results_imp$prediction.error)
-
-
-hyper_grid <- expand.grid(
-  mtry = floor(n_features * c(.05, .25, .4)),
-  min.node.size = c(1, 3, 5, 10), 
-  replace = c(TRUE, FALSE),                               
-  sample.fraction = c(.5, .63, .8),
-  ntrees = c(500,1500,3000),
-  rmse = NA                                               
-)
-
-for(i in seq_len(nrow(hyper_grid))) {
-  # fit model for ith hyperparameter combination
-  fit <- ranger(
-    formula         = model ~ ., 
-    data            = model_selection, 
-    num.trees       = hyper_grid$ntrees[i],
-    mtry            = hyper_grid$mtry[i],
-    min.node.size   = hyper_grid$min.node.size[i],
-    replace         = hyper_grid$replace[i],
-    sample.fraction = hyper_grid$sample.fraction[i],
-    verbose         = FALSE,
-    num.threads = 16,
-    respect.unordered.factors = 'order',
-    importance = "impurity"
-  )
-  # export OOB error 
-  hyper_grid$rmse[i] <- sqrt(fit$prediction.error)
-}
-
-capture.output(hyper_grid %>%
-  arrange(rmse) %>%
-  mutate(perc_gain = (default_rmse_imp - rmse) / default_rmse_imp * 100) %>%
-  head(10), file = paste0(out_dir, "Best_Params_impurity.txt"))
-
 # Perm
 Tree_Results_perm <- ranger(model ~., data = model_selection, write.forest = T, 
                            num.threads = 16, oob.error = T, keep.inbag = T, importance = "permutation")
@@ -143,27 +105,16 @@ capture.output(hyper_grid_perm %>%
                  mutate(perc_gain = (default_rmse_perm - rmse) / default_rmse_perm * 100) %>%
                  head(10), file = paste0(out_dir, "Best_Params_perm.txt"))
 
-
 #### BUILD RF with best grid parameters from last step and apply them to predict
-rf_impurity <- ranger(model ~., data = model_selection, write.forest = T, num.trees = 500, 
-                      replace = F, mtry = 18, min.node.size = 5, sample.fraction = 0.63,
-                       num.threads = 16, oob.error = T, keep.inbag = T, importance = "impurity", 
-                      respect.unordered.factors = 'order')
 rf_permutation <- ranger(model ~., data = model_selection, write.forest = T, num.trees = 3000, 
                       replace = F, mtry = 18, min.node.size = 5, sample.fraction = 0.8,
                       num.threads = 16, oob.error = T, keep.inbag = T, importance = "permutation", 
                       respect.unordered.factors = 'order')
 
-rf_impurity$prediction.error
 rf_permutation$prediction.error
 
-p1 <- vip::vip(rf_impurity, num_features = 20, bar = FALSE) + ggtitle("Impurity RF")
-p2 <- vip::vip(rf_permutation, num_features = 20, bar = FALSE) + ggtitle("Permutation RF")
-RF_training <- gridExtra::grid.arrange(p1, p2, nrow = 1)
+RF_training <- vip::vip(rf_permutation, num_features = 20, bar = FALSE) + ggtitle("Permutation RF")
 ggsave(filename = paste0("RF_training.",chunk,".png"), path = out_dir, plot = RF_training, device = "png", units = "px", height = 3000, width = 3200)
-
-cfmt <- confusionMatrix(data =rf_impurity$confusion.matrix ) #factor(cv$estim$tol0.1), factor(cv$true))
-capture.output(cfmt, file = paste0(out_dir, "RF_accuracy_impurity.txt"))
 
 cfmt_per <- confusionMatrix(data =rf_permutation$confusion.matrix ) #factor(cv$estim$tol0.1), factor(cv$true))
 capture.output(cfmt_per, file = paste0(out_dir, "CFM_accuracy_permutation.txt"))
@@ -174,19 +125,9 @@ rep_table_labels <- test_table$model
 test_table$model <- as.factor(test_table$model)
 
 ### Same but with CV
-#most_important_impurity <- c("fr_al_OOA", "fD_EUR_DEN", "fD_CHB_DEN","R_d_EUR_D","H1_CHB")
-#most_important_permutation <- c("fr_al_OOA", "fD_CHB_DEN","R_d_CHB_D","fD_EUR_DEN", "R_d_EUR_D")
-
-most_important_impurity <-   names(sort(rf_impurity$variable.importance, decreasing = T))
 most_important_permutation <- names(sort(rf_permutation$variable.importance, decreasing = T))
 
 make_comparison_number_ft <- function(number) {
-  cv_rf_imp <- cv4postpr(rep_table_labels, test_table %>% dplyr::select(all_of(most_important_impurity[1:number])), 
-                         nval=15, tol=.1, method = "mnlogistic", corr = T)
-  s_rf_imp <- summary(cv_rf_imp)
-  cfm_rf_imp <- confusionMatrix(factor(cv_rf_imp$estim$tol0.1), factor(cv_rf_imp$true))
-  capture.output(cfm_rf_imp, file = paste0(out_dir, "ABC.CV.cfm.imp.", number,".txt"))
-  
   cv_rf_per <- cv4postpr(rep_table_labels, test_table %>% dplyr::select(all_of(most_important_permutation[1:number])), 
                          nval=15, tol=.1, method = "mnlogistic", corr = T)
   s_rf_per <- summary(cv_rf_per)
@@ -197,9 +138,11 @@ make_comparison_number_ft <- function(number) {
 
 make_comparison_number_ft(3)
 make_comparison_number_ft(5)
-make_comparison_number_ft(11)
+make_comparison_number_ft(7) # This was the one with highest accuracy
 make_comparison_number_ft(9)
+make_comparison_number_ft(11)
 
+### Comparison with NeuralNet method
 cv_nnet <- cv4postpr(rep_table_labels, test_table %>% dplyr::select(-any_of(vector_selection),-model), 
                      nval=15, tol=.1, method="neuralnet")
 s <- summary(cv_nnet, digit = 2)
@@ -223,8 +166,10 @@ make_regression <- function(stats_df, parameters, param_name, method_name = "per
   train_reg <- reg_den[!lgl_D2n,]
   test_reg <- reg_den[lgl_D2n,]
   
+  # Very usefull to use formulas inside functions
   formule <- as.formula(paste(param_name, "~ ."))
   
+  # Perform the RF
   Tree_Results_reg <- ranger(formule , data = train_reg, write.forest = F, 
                              num.threads = 16, oob.error = T, keep.inbag = T, importance = method_name)
   default_rmse <- sqrt(Tree_Results_reg$prediction.error)
@@ -264,6 +209,7 @@ make_regression <- function(stats_df, parameters, param_name, method_name = "per
 
   capture.output(Best_hyperparams, file = paste0(out_dir, "Best_Params_", param_name, "_", method_name, ".txt"))
   
+  # Use the best hyperparameters to perform accuracy tests
   Tree_Results_reg <- ranger(formule , data = train_reg, write.forest = T, 
                              mtry = Best_hyperparams$mtry[1], min.node.size = Best_hyperparams$min.node.size[1], 
                              sample.fraction = Best_hyperparams$sample.fraction[1],
@@ -279,6 +225,7 @@ make_regression <- function(stats_df, parameters, param_name, method_name = "per
   results_abc_reg <- data.frame("Mean_posterior" = rep(0, dim(test_reg)[1]), 
                                 "True_param" = rep(0,dim(test_reg)[1]))
   
+  # Perform the abc for each parameter
   for (i in 1:dim(test_reg)[1]) {
     abc_reg <- abc(target = test_reg[i,best_variables[1:5]], param = train_reg[,48], sumstat = train_reg[,best_variables[1:5]], method = "loclinear",tol = 0.1)
     results_abc_reg[i,1] <- mean(abc_reg$adj.values)
@@ -288,7 +235,7 @@ make_regression <- function(stats_df, parameters, param_name, method_name = "per
   return(results_abc_reg)
 }
 
-# Calculate factor 2#
+# Calculate factor 2 and other measures of accuracy
 
 rs_seur <- make_regression(statistics_D2n_f,parameters, "sel_eur")
 sum(rs_seur$True_param >= (rs_seur$Mean_posterior * 0.5 ) & rs_seur$True_param <= (rs_seur$Mean_posterior * 2 )) / length(rs_seur$True_param) 
@@ -320,7 +267,6 @@ sum(rs_ooa$True_param >= (rs_ooa$Mean_posterior * 0.5 ) & rs_ooa$True_param <= (
 sqrt(mean(rs_ooa$Mean_posterior - rs_ooa$True_param )^2)
 cor.test(rs_ooa$Mean_posterior,rs_ooa$True_param, method = "spearman")
 
-
 plot(rs_ooa$Mean_posterior, rs_ooa$True_param)
 plot(rs_time$Mean_posterior, rs_time$True_param)
 plot(rs_chb$Mean_posterior, rs_chb$True_param)
@@ -350,15 +296,3 @@ time_stats_01 <- process_abc(abc_nnet_tra, "onset_time", 1)
 ooa_stats_01 <- process_abc(abc_nnet_tra, "sel_ooa", 1) 
 
 # END
-
-dir <- "/home/jorgeg/PROJECTS.JORGE/SIMULATIONS/NO_NEG"
-out_dir <- paste0(dir, "/OUT/")
-load(file = paste(out_dir, "RF_ft_denifr.Rdata") )
-
-save.image(file = paste(out_dir, "RF_ft_denifr.Rdata") )
-
-### PLOT POSTER
-conf_mat_feature <- ggplot(as.data.frame(cfm_rf_per[["table"]]), aes(x=Reference, y = Freq, fill = Prediction)) + 
-  geom_bar(position="fill",stat="identity") + 
-  scale_fill_manual(values=c("#B1ABC3", "#1e1247","#867BA0","#3C1871")) + theme_minimal()
-ggsave(filename = paste0("CV.poster",chunk,".png"), path = out_dir, plot = last_plot(), device = "png", units = "px", height = 1800, width = 3200)

@@ -1,5 +1,4 @@
 ##### Final ABC DEN, NEA, ANC
-
 library(tidyverse)
 library(abc)
 library(stats)
@@ -12,6 +11,9 @@ set.seed(123)
 source("/home/jorge/Rscripts/AuxAbc.R")
 
 chunk <- "CORE"
+# We will eliminate this statistics that have been also calculated but are 
+# nonsense (like S_den) or that are merged in a broader one, like the fr on 
+# neanderthals which is better captured in "fr_al_nea"
 vector_selection <- c("S_DEN","fr_deni_old","ZnS_DEN","replicate","ZnS_NEA", 
                         "fr_charg","fr_altai","fr_vin")
 
@@ -50,21 +52,21 @@ parameters <- read_tsv(paste0(train_path, "parameters.D2N.NEG.TEST.stats.tsv"),
 stats_observed <- read_tsv("/home/jorge/PROJECTS.JORGE/SIMULATIONS/WITH.ALLEL.FREQUENCIES/obs.CORE.stats.separated.70kb.tsv", 
                            col_names  = names_statistics) %>% dplyr::select(-any_of(vector_selection))
 
-#most_important_impurity <- c("fr_al_OOA","fr_deni", "fD_EUR_DEN", "fD_CHB_DEN" ,"R_d_EUR_D" )#,"H1_CHB", "H12_CHB")
-most_important_permutation <- c("fr_al_OOA", "fr_deni","fD_EUR_DEN", "fD_CHB_DEN","R_d_CHB_D", "R_d_EUR_D", "fr_al_nea", "D_EUR_DEN", "D_CHB_DEN")#, "S_NEA","D_CHB_NEA")
+# This are the most important features inferred by the RF
+most_important_permutation <- c("fr_al_OOA", "fr_deni","fD_EUR_DEN", "fD_CHB_DEN","R_d_CHB_D", "R_d_EUR_D", "fr_al_nea", "D_EUR_DEN", "D_CHB_DEN")
 
 # Model discrimination
 model_selection <- reference_table[,-53] %>% dplyr::select(-any_of(vector_selection))
 model_selection$model <- as.factor(model_selection$model)
 
+# Check how the RF differentiates classes
 p_nosubset <- make_pca(model_selection,stats_observed, subsetting = F) + scale_color_manual(values=c("darkgrey","#3C1871","purple","black","lightgreen"))
-#p_subset <- make_pca(model_selection,stats_observed, subsetting = T, vector_to_select = most_important_impurity) + scale_color_manual(values=c("darkgrey","#3C1871","purple","black","lightgreen"))
 p_RF_perm <- make_pca(model_selection,stats_observed, subsetting = T, vector_to_select = most_important_permutation) + scale_color_manual(values=c("darkgrey","#3C1871","purple","black","lightgreen"))
 
 lay <- rbind(c(1),
              c(2))
 
-abc_rf <- grid.arrange(p_nosubset,p_RF_perm, layout_matrix= lay) # Bien pero mejorar 
+abc_rf <- grid.arrange(p_nosubset,p_RF_perm, layout_matrix= lay)  
 ggsave(filename = paste0("PCA.results.",chunk,".png"), path = out_dir, plot = abc_rf, device = "png", units = "px", height = 3000, width = 3200)
 
 # Posterior probabilities
@@ -82,33 +84,8 @@ post_pr_rfl <- postpr(target = stats_observed  %>% dplyr::select(all_of(most_imp
                       tol = 0.1, method = "mnlogistic", corr = T)
 summ_rfl <- summary(post_pr_rfl,digits = 2)
 
-# Adjusted values of stats
-pdf(file=paste0(out_dir,"/adjust.values.", chunk, ".pdf"))
-for (i in 1:(dim(model_selection)[2]-1)) {
-  par(mfrow = c(4,1))
-  try(den_fdchb <- get_adjust(stats_observed, model_selection, "DENI",c(i)))
-  try(nea_fdchb <- get_adjust(stats_observed, model_selection, "NEA",c(i)))
-  try(anc_fdchb <- get_adjust(stats_observed, model_selection, "ANC",c(i)))
-  try(anc_fdchb <- get_adjust(stats_observed, model_selection, "D2N",c(i)))
-  
-}
-dev.off()
-
-pdf(file=paste0(out_dir,"/Boxplots.simulations.",chunk, ".pdf"))
-for (i in 1:(dim(model_selection)[2]-1)) {
-  statistic_name <- colnames(model_selection)[i]
-  print(statistic_name)
-  md_longer <- pivot_longer(model_selection[,c(i,length(model_selection))], cols = any_of(statistic_name))
-  boxplots <- ggplot(md_longer, aes(x=model, y=value,fill=model)) + 
-    geom_boxplot(position = position_dodge(1)) + 
-    geom_hline(yintercept = as.numeric(stats_observed[,i]),linetype = "dashed") +
-    theme_classic() + labs(x = "Importance", y = statistic_name)
-  print(boxplots)
-}
-dev.off()
-
 ###### Posterior parameter 
-ref_infer <- merge(statistics_D2n_f,parameters, by="replicate") #%>% select(-S_DEN,-fr_deni_old,-ZnS_DEN)
+ref_infer <- merge(statistics_D2n_f,parameters, by="replicate") 
 
 make_plot_with_KS <- function(prior_ref_table,results_from_abc, parameter_name) {
   KS_r <- ks.test(prior_ref_table[,parameter_name],results_from_abc$adj.values[,parameter_name])
@@ -256,15 +233,6 @@ st_den_post <- dispersion_statistics(abc_RF_sden_post$adj.values)
 st_nea_post <- dispersion_statistics(abc_RF_snea_post$adj.values)
 st_time_post <- dispersion_statistics(abc_RF_time_post$adj.values)
 
-## Poster figures
-
-p_nosubset <- make_pca(model_selection,stats_observed, subsetting = F) + scale_color_manual(values=c("#B1ABC3", "#1e1247", "#867BA0","#3C1871", "#00C853")) 
-p_subset <- make_pca(model_selection,stats_observed, subsetting = T, vector_to_select = most_important_permutation) + scale_color_manual(values=c("#B1ABC3", "#1e1247", "#867BA0","#3C1871", "#00C853"))
-lgd <- cowplot::get_legend(p_nosubset)
-
-plot_poster <- cowplot::plot_grid(p_nosubset + theme(legend.position = "none") , p_subset + theme(legend.position = "none"), lgd, ncol = 3, rel_widths = c(3,3,1))
-ggsave(filename = paste0("PCA.poster",chunk,".png"), path = out_dir, plot = plot_poster, device = "png", units = "px", height = 1200, width = 2200)
-
 ## paper figure
 parameters_legend <- cowplot::get_legend(x_post)
 cowplot::plot_grid(y_post + labs(title ="") + theme(legend.position = "none"),
@@ -276,13 +244,3 @@ cowplot::plot_grid(y_post + labs(title ="") + theme(legend.position = "none"),
                    e_post + labs(title ="") + theme(legend.position = "none"), 
                     nrow = 2, rel_widths = c(3,3,3,1,3,3,3), labels = c("A","B","C","","D","E","F"))
 ggsave(filename = paste0("ABC_RF.parameter_estimation.labels_post_2",chunk,".png"), path = out_dir, plot = last_plot(), device = "png", units = "px", height = 2400, width = 3200)
-
-# Posteriors pal poster
-cowplot::plot_grid(y + labs(title ="") + theme(legend.position = "none"),
-                   x + labs(title ="", x = "s in eas") + theme(legend.position = "none"),
-                   parameters_legend, nrow = 1, rel_widths = c(3,3,1))
-ggsave(filename = paste0("ABC_RF.poster",chunk,".png"), path = out_dir, plot = last_plot(), device = "png", units = "px", height = 1200, width = 3200)
-
-save.image(paste0(out_dir,"ABC_FINAL.4models.R"))
-
-load(paste0(out_dir,"ABC_FINAL.4models.R"))
