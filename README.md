@@ -56,5 +56,8 @@ Includes the developed haplotype painting algorithm. As input, the script
 expects a haplotype matrix of 0,1 (reference, alternative) in which each column 
 represents a polymorphism and each row an individual. 
 
+## HaplotypeStructure.ipynb & Correlation_Eurasian.R
+
+Scripts used to generate Figure 2b and Supplementary Figure S2
 
 For more details, see Materials and Methods.
